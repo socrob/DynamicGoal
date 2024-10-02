@@ -6,13 +6,12 @@ Our approach to dynamic goal handling is inspired by the multimodal navigation m
 
 ```bibtex
 @inproceedings{bettencourt2021multimodal,
-  title={Multimodal navigation for autonomous service robots},
-  author={Bettencourt, Rui and Lima, Pedro U},
-  booktitle={2021 IEEE International Conference on Autonomous Robot Systems and Competitions (ICARSC)},
-  pages={25--30},
+  author={Bettencourt, Rui and Lima, Pedro U.},
+  booktitle={2021 IEEE International Conference on Autonomous Robot Systems and Competitions (ICARSC)}, 
+  title={Multimodal Navigation for Autonomous Service Robots}, 
   year={2021},
-  organization={IEEE}
-}
+  pages={25-30},
+  doi={10.1109/ICARSC52212.2021.9429771}}
 ```
 
 The method proposed by Bettencourt and Lima introduces a multimodal navigation system that combines different navigation strategies to achieve robust and efficient navigation in complex environments.

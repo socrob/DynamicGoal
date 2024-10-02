@@ -1,0 +1,9 @@
+# Node configuration
+node_name: "topic_to_tf_node"
+debug: False
+rate: 10.0
+
+topic_name: /people_follower/topic_to_tf/point    #The code expects this topic to be a PointStamped. If you want other topic please change the code
+control_topic_name: /people_follower/topic_to_tf/control
+origin_frame: map                               #The name of the frame to serve as parent
+target_frame: tracked_object #dyn_goal_frame                    #The frame where the data will be published to

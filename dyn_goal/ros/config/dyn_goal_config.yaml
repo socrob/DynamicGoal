@@ -1,0 +1,23 @@
+# Node configuration
+node_name: "dyn_goal"
+origin_frame: "map"
+debug: False
+mocup: False
+rate: 0.5
+
+#Thresholds
+movement_threshold: 0.5       # Distance in meters the target has to move to trigger an update of the algorithm
+rotational_threshold: 0.91    # Amount of radians the target needs to rotate to trigger an update of the algorithm, if update_on_rotation is set to True
+availability_threshold: 90    # Occupancy grids mark cells as occupied with 100% and free with 0%. This threshold is at what percentage a cell is considered free to the algorithm
+convert_offset: 0.0           # offset in the map in relation to the real world. Usualy it's 0
+time_without_receiving_tf: 10.0 # amount of time without a tf update before it quits the dynamic goal
+
+#Extra Configurations
+update_head: False            # This variable defines whether you want the node to try and update the head rotation towards the goal to keep it in the field of view.
+                              # This might not work if you are not using an mbot. USE WITH CARE, IN CASE OF BOUBT KEEP DISABLED!
+activate_ppl_detection: False  # This variable activates the people detection for socrob team. If you are not using the same people detection change this to False
+update_on_rotation: False     # This variable lets you choose if you want the algorithm to update the dynamic goal when the tf you are following rotates (use only if you trust the rotation returned)
+number_of_points: 50          # Number of points of the generated circle around the target per desired meter around the target
+granularity: 0.1              # How much distance is added to the circle of desired distance until an achievable goal is found (ex: 0.1 is 0.1 meters or 10 cm)
+full_circle: 0.8              # Percentage of the circle that should be considered (0 to 1 where 0 is 1 point and 1 is the full circle)
+allow_backwards: False        # if the robot is closer to the desired distance, should it move back or not

@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="launch_perception" default="false" />
+    <arg name="topic_pub"         default="true"  />
+    <arg name="launch_navigation" default="true" />
+
+    <!-- perception -->
+    <group if="$(arg launch_perception)">
+        <include file="$(find mbot_perception_launch)/launch/mbot_perception.launch" >
+            <arg name="max_detection_rate_specific"     value="5.0" />
+            <arg name="threshold_generic"               value="0.6" />
+            <arg name="launch_generic"                  value="true" />
+            <arg name="launch_specific"                 value="false" />
+        </include>
+
+        <group ns="/mbot_perception" >
+
+            <node pkg="topic_tools" type="relay" name="relay_people_trackers" output="log" args="people_tracker/tracked_people tracked_people">
+            <param name="lazy" value="true"/>
+            </node>
+
+        </group>
+
+        <include file="$(find bayes_people_tracker)/launch/bayes_people_tracker.launch"/>
+        <include file="$(find people_follower)/launch/people_follower.launch">
+            <arg name="launch_tracker"          value="true" />
+            <arg name="launch_navigation_stack" value="false" />
+            <arg name="launch_detector"         value="false" />
+            <arg name="launch_localizer"        value="true" />
+
+            <arg name="navigation_stack"        value="None" />
+            <arg name="poi_lost_timeout"        value="1.0" />
+        </include>
+    </group>
+
+    <!-- Launch dedicated move base for people following-->
+    <include file="$(find navigation_tiago)/launch/people_following_movebase.launch" if="$(arg launch_navigation)"/>
+
+    <!-- Node collects a certain tf and sends it's coordinates to the goal of move base -->
+
+    <node ns="people_follower" pkg="dyn_goal" type="dyn_goal_node" name="dyn_goal_node" respawn="false" output="screen"
+    args="$(find dyn_goal)/ros/config/dyn_goal_config.yaml"/>
+
+    <node if="$(arg topic_pub)" pkg="dyn_goal" type="topic_to_tf_node" name="topic_to_tf_node" respawn="false" output="screen"
+    args="$(find dyn_goal)/ros/config/topic_to_tf_config.yaml"/>
+</launch>

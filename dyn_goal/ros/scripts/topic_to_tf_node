@@ -1,0 +1,6 @@
+#!/usr/bin/env python
+
+import dyn_goal_ros.topic_to_tf
+
+if __name__ == '__main__':
+ dyn_goal_ros.topic_to_tf.main()

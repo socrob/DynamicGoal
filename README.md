@@ -2,6 +2,23 @@
 
 This repository contains ROS packages for dynamic goal handling, including plugins, utilities, and test cases for robust navigation in robot systems. It is structured into three primary packages: dyn_goal, and two modifications to voxel_grid and costmap_2d packages.
 
+Our approach to dynamic goal handling is inspired by the multimodal navigation method presented in the following paper:
+
+```bibtex
+@inproceedings{bettencourt2021multimodal,
+  title={Multimodal navigation for autonomous service robots},
+  author={Bettencourt, Rui and Lima, Pedro U},
+  booktitle={2021 IEEE International Conference on Autonomous Robot Systems and Competitions (ICARSC)},
+  pages={25--30},
+  year={2021},
+  organization={IEEE}
+}
+```
+
+The method proposed by Bettencourt and Lima introduces a multimodal navigation system that combines different navigation strategies to achieve robust and efficient navigation in complex environments.
+
+Our implementation incorporates these concepts to create a flexible and robust dynamic goal handling system that can adapt to changing environments and goals.
+
 ## Dependencies Packages Overview
 1. costmap_2d
 

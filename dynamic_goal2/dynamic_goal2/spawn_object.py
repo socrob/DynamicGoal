@@ -52,9 +52,9 @@ class SpawnObject(Node):
     static_transform.header.frame_id = "map"
     static_transform.child_frame_id = "cola"
 
-    static_transform.transform.translation.x = 2.75
-    static_transform.transform.translation.y = 0.540
-    static_transform.transform.translation.z = 0.7975
+    static_transform.transform.translation.x = 0.0
+    static_transform.transform.translation.y = 0.0
+    static_transform.transform.translation.z = 0.0
     static_transform.transform.rotation.x = 0.0
     static_transform.transform.rotation.y = 0.0
     static_transform.transform.rotation.z = 0.0
@@ -70,7 +70,7 @@ def main(args=None):
   spin_thread = Thread(target=rclpy.spin, args=(node,))
   spin_thread.start()
 
-  node.spawn_object()
+  # node.spawn_object()
   try:
       spin_thread.join()
   except KeyboardInterrupt:

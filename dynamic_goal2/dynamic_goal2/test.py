@@ -36,7 +36,7 @@ class TestClient(Node):
 def main(args=None):
   rclpy.init(args=args)
   node = TestClient()
-  node.send_goal("cola")
+  node.send_goal("test")
 
   rclpy.spin(node)
 

@@ -85,7 +85,7 @@ class DynamicGoal2(Node):
       cancel_callback=self._dynamic_goal_cancel_callback,
     )
     self._navigation_client = ActionClient(self, NavigateToPose, "/navigate_to_pose")
-    # self._navigation_client.wait_for_server() # TODO
+    self._navigation_client.wait_for_server()
 
     # Publishers
     self._marker_publisher_pub = self.create_publisher(MarkerArray, "/visualization_marker_array", 10)
@@ -321,6 +321,20 @@ class DynamicGoal2(Node):
       cancel_future.add_done_callback(self._cancel_navigation_goal_callback)
 
   def _dynamic_goal_execute_callback(self, goal_handle):
+    self.get_logger().info("Starting new DynamicGoal execution")
+
+    # ✅ RESET INTERNAL STATE
+    self._navigation_goal_finnished = False
+    self._goal_handle = None
+    self._navigation_goal_future = None
+    self._get_navigation_result_future = None
+    self._pending_cancel = False
+
+    # Reset memory so next goal works correctly
+    self._memory.first_time = True
+    self._memory.last_point = None
+    self._memory.last_yaw = None
+
     goal_name = goal_handle.request.goal
     self._navigation_goal_finnished = False
     while not self._navigation_goal_finnished:
@@ -401,6 +415,9 @@ class DynamicGoal2(Node):
 
       async_goal = NavigateToPose.Goal()
       async_goal.pose = pose
+      if self._goal_handle is not None:
+        self.get_logger().info("Canceling previous navigation goal before sending new one")
+        cancel_future = self._goal_handle.cancel_goal_async()
       self._navigation_goal_future = self._navigation_client.send_goal_async(async_goal)
       self._navigation_goal_future.add_done_callback(self._navigation_goal_response_callback)
       self._rate.sleep()
@@ -413,14 +430,18 @@ class DynamicGoal2(Node):
 
   def _get_navigation_result_callback(self, future):
     result = future.result() 
-    if result.status == 4:
-      self.get_logger().info("Navigation goal was achieved successfully.")
-      self._navigation_goal_finnished = True
 
-    # TODO
-    elif result.status == 6:
-      # When you send a new navigation goal and the previous one has not finnished, the previous is terminated.
-      pass
+    if result.status == 4:  # SUCCEEDED
+        self.get_logger().info("Navigation goal was achieved successfully.")
+        self._navigation_goal_finnished = True
+
+    elif result.status == 5:  # CANCELED
+        self.get_logger().warn("Navigation goal was canceled.")
+        self._navigation_goal_finnished = True
+
+    elif result.status == 6:  # ABORTED
+        self.get_logger().warn("Navigation goal was aborted.")
+        self._navigation_goal_finnished = True
       
   def _navigation_goal_response_callback(self, future):
     self._goal_handle = future.result()

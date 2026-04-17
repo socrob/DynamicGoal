@@ -46,6 +46,7 @@ class DynamicGoal2(Node):
     self.declare_parameter("radius", 0.50)
     self.declare_parameter("rate", 0.50)
     self.declare_parameter("rotational_threshold", 0.90)
+    self.declare_parameter("full_circle", 1.0)
 
     self._origin_frame = self.get_parameter("origin_frame").get_parameter_value().string_value
     self._robot_frame = self.get_parameter("robot_frame").get_parameter_value().string_value
@@ -58,6 +59,7 @@ class DynamicGoal2(Node):
     self._radius = self.get_parameter("radius").get_parameter_value().double_value
     self._rate = self.get_parameter("rate").get_parameter_value().double_value
     self._rotational_threshold = self.get_parameter("rotational_threshold").get_parameter_value().double_value
+    self._full_circle = self.get_parameter("full_circle").get_parameter_value().double_value
 
     self._goal = ""
     self._goal_handle = None
@@ -76,7 +78,6 @@ class DynamicGoal2(Node):
     self._map_info = None
     self._costmap_width = None
     self._costmap_height = None
-    self._full_circle = 0.8  # TODO
 
     # Actions
     self._dynamic_goal_server = ActionServer(

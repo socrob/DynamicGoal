@@ -2,11 +2,8 @@ dynamic_goal2:
   ros__parameters:
     origin_frame: "map"
     robot_frame: "base_footprint"
-    rviz_visualization: true
-
-    # Costmap
-    costmap_width: 191
-    costmap_height: 177
+    rviz_line_visualization: false
+    rviz_circle_visualization: true
 
     # Thresholds
     movement_threshold: 0.50

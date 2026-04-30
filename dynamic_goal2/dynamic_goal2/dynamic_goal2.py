@@ -72,6 +72,7 @@ class DynamicGoal2(Node):
     self._pending_cancel = False
     self._dynamic_goal_active = False
     self._warned_no_map = False
+    self._costmap_updated = False
 
     self._memory = Memory()
     self._rate = self.create_rate(self._rate)
@@ -163,9 +164,7 @@ class DynamicGoal2(Node):
           break
 
     if len(circle) == 0:
-      # Fallback to the target position if no valid ring point is found.
-      q = self.get_quaternion(target_position, target_position)
-      return target_position, q
+      return None, None
 
     if self._rviz_circle_visualization:
       self.show_spheres_rviz(circle, highlight_index=0)
@@ -223,10 +222,9 @@ class DynamicGoal2(Node):
       return False
 
     cost = self._map[ix, iy]
-    if cost <= occupancy:
-      return True
-    else:
+    if cost < 0:
       return False
+    return cost <= occupancy
 
   def is_path_to_target_available(self, origin, target):
     dx = target.x - origin.x
@@ -344,6 +342,7 @@ class DynamicGoal2(Node):
 
     self._map = data.reshape((height, width)).T
     self._warned_no_map = False
+    self._costmap_updated = True
 
   def _cancel_navigation_goal_callback(self, future):
     cancel_response = future.result()
@@ -407,6 +406,10 @@ class DynamicGoal2(Node):
           return result
 
         update_goal = False
+        use_candidate = False
+        candidate_goal = None
+        candidate_q = None
+        map_updated = self._costmap_updated
         # TODO: handle missing TFs with a timeout/backoff policy instead of only logging and retrying.
         try:
           target_transform = self._tf_buffer.lookup_transform(self._origin_frame, goal_name, Time())
@@ -437,6 +440,45 @@ class DynamicGoal2(Node):
         elif self._memory.first_time:
           update_goal = True
 
+        if not update_goal and map_updated and self._current_navigation_goal is None:
+          update_goal = True
+          self._costmap_updated = False
+        elif not update_goal and map_updated and self._current_navigation_goal is not None:
+          try:
+            robot_transform = self._tf_buffer.lookup_transform(self._origin_frame, self._robot_frame, Time())
+          except TransformException as e:
+            self.get_logger().warn(f"Could not transform from {self._origin_frame} to {self._robot_frame}: {e}")
+            self._costmap_updated = False
+            self._rate.sleep()
+            continue
+
+          robot_point = Point()
+          robot_point.x = robot_transform.transform.translation.x
+          robot_point.y = robot_transform.transform.translation.y
+          robot_point.z = 0.0
+
+          candidate_goal, candidate_q = self.choose_navigation_goal(robot_point, target_point)
+          if candidate_goal is not None:
+            current_dist = self.distance_2D(
+              self._current_navigation_goal.x,
+              self._current_navigation_goal.y,
+              target_point.x,
+              target_point.y,
+            )
+            candidate_dist = self.distance_2D(
+              candidate_goal.x,
+              candidate_goal.y,
+              target_point.x,
+              target_point.y,
+            )
+            if candidate_dist + self._granularity < current_dist:
+              update_goal = True
+              use_candidate = True
+
+          self._costmap_updated = False
+        elif map_updated:
+          self._costmap_updated = False
+
         if update_goal:
           self._memory.last_point = target_point
           self._memory.last_yaw = target_yaw
@@ -449,19 +491,28 @@ class DynamicGoal2(Node):
             self._rate.sleep()
             continue
 
-          try:
-            robot_transform = self._tf_buffer.lookup_transform(self._origin_frame, self._robot_frame, Time())
-          except TransformException as e:
-            self.get_logger().warn(f"Could not transform from {self._origin_frame} to {self._robot_frame}: {e}")
+          if use_candidate:
+            goal = candidate_goal
+            q = candidate_q
+          else:
+            try:
+              robot_transform = self._tf_buffer.lookup_transform(self._origin_frame, self._robot_frame, Time())
+            except TransformException as e:
+              self.get_logger().warn(f"Could not transform from {self._origin_frame} to {self._robot_frame}: {e}")
+              self._rate.sleep()
+              continue
+
+            robot_point = Point()
+            robot_point.x = robot_transform.transform.translation.x
+            robot_point.y = robot_transform.transform.translation.y
+            robot_point.z = 0.0
+
+            goal, q = self.choose_navigation_goal(robot_point, target_point)
+
+          if goal is None:
+            self.get_logger().debug("No free navigation goal found; waiting for costmap update.")
             self._rate.sleep()
             continue
-
-          robot_point = Point()
-          robot_point.x = robot_transform.transform.translation.x
-          robot_point.y = robot_transform.transform.translation.y
-          robot_point.z = 0.0
-
-          goal, q = self.choose_navigation_goal(robot_point, target_point)
 
           pose = PoseStamped()
           pose.header.frame_id = self._origin_frame
@@ -498,12 +549,16 @@ class DynamicGoal2(Node):
       self._dynamic_goal_active = False
 
   def _get_navigation_result_callback(self, future):
+    if future is not self._get_navigation_result_future:
+      self.get_logger().debug("Ignoring stale navigation result.")
+      return
+
     result = future.result()
     if result.status == GoalStatus.STATUS_SUCCEEDED:
       self.get_logger().info("Navigation goal was achieved successfully.")
       if not self._follow_until_cancel:
         self._navigation_goal_finnished = True
-      self._current_navigation_goal = None
+        self._current_navigation_goal = None
     elif result.status == GoalStatus.STATUS_CANCELED:
       self.get_logger().info("Navigation goal was canceled.")
       self._current_navigation_goal = None

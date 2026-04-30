@@ -47,6 +47,7 @@ class DynamicGoal2(Node):
     self.declare_parameter("rate", 0.50)
     self.declare_parameter("rotational_threshold", 0.90)
     self.declare_parameter("full_circle", 1.0)
+    self.declare_parameter("follow_until_cancel", True)
 
     self._origin_frame = self.get_parameter("origin_frame").get_parameter_value().string_value
     self._robot_frame = self.get_parameter("robot_frame").get_parameter_value().string_value
@@ -60,6 +61,7 @@ class DynamicGoal2(Node):
     self._rate = self.get_parameter("rate").get_parameter_value().double_value
     self._rotational_threshold = self.get_parameter("rotational_threshold").get_parameter_value().double_value
     self._full_circle = self.get_parameter("full_circle").get_parameter_value().double_value
+    self._follow_until_cancel = self.get_parameter("follow_until_cancel").get_parameter_value().bool_value
 
     self._goal = ""
     self._goal_handle = None
@@ -197,6 +199,8 @@ class DynamicGoal2(Node):
           self._rate = self.create_rate(param.value)
       elif param.name == "rotational_threshold":
         self._rotational_threshold = param.value
+      elif param.name == "follow_until_cancel":
+        self._follow_until_cancel = param.value
 
     return SetParametersResult(successful=True)
 
@@ -393,7 +397,7 @@ class DynamicGoal2(Node):
     self._memory.first_time = True
 
     try:
-      while not self._navigation_goal_finnished:
+      while True:
         if goal_handle.is_cancel_requested:
           self._cancel_active_navigation_goal()
           goal_handle.canceled()
@@ -403,6 +407,7 @@ class DynamicGoal2(Node):
           return result
 
         update_goal = False
+        # TODO: handle missing TFs with a timeout/backoff policy instead of only logging and retrying.
         try:
           target_transform = self._tf_buffer.lookup_transform(self._origin_frame, goal_name, Time())
         except TransformException as e:
@@ -475,8 +480,12 @@ class DynamicGoal2(Node):
           async_goal = NavigateToPose.Goal()
           async_goal.pose = pose
           self._current_navigation_goal = Point(x=goal.x, y=goal.y, z=goal.z)
+          self._navigation_goal_finnished = False
           self._navigation_goal_future = self._navigation_client.send_goal_async(async_goal)
           self._navigation_goal_future.add_done_callback(self._navigation_goal_response_callback)
+
+        if not self._follow_until_cancel and self._navigation_goal_finnished:
+          break
 
         self._rate.sleep()
 
@@ -492,14 +501,19 @@ class DynamicGoal2(Node):
     result = future.result()
     if result.status == GoalStatus.STATUS_SUCCEEDED:
       self.get_logger().info("Navigation goal was achieved successfully.")
-      self._navigation_goal_finnished = True
+      if not self._follow_until_cancel:
+        self._navigation_goal_finnished = True
       self._current_navigation_goal = None
     elif result.status == GoalStatus.STATUS_CANCELED:
       self.get_logger().info("Navigation goal was canceled.")
       self._current_navigation_goal = None
+      if not self._follow_until_cancel:
+        self._navigation_goal_finnished = True
     elif result.status == GoalStatus.STATUS_ABORTED:
       self.get_logger().warn("Navigation goal was aborted.")
       self._current_navigation_goal = None
+      if not self._follow_until_cancel:
+        self._navigation_goal_finnished = True
 
   def _navigation_goal_response_callback(self, future):
     self._goal_handle = future.result()

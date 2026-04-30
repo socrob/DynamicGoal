@@ -10,9 +10,13 @@
   <exec_depend>builtin_interfaces</exec_depend>
   <exec_depend>dynamic_goal2_action</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>robot_navigation_api</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>tiago_gazebo</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
 

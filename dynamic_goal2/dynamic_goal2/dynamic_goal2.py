@@ -1,4 +1,5 @@
 import math
+import time
 import numpy as np
 
 import rclpy
@@ -66,6 +67,8 @@ class DynamicGoal2(Node):
     self._goal = ""
     self._goal_handle = None
     self._current_navigation_goal = None
+    self._current_navigation_goal_id = 0
+    self._dynamic_start_time = None
     self._navigation_goal_future = None
     self._get_navigation_result_future = None
     self._navigation_goal_finnished = True
@@ -357,6 +360,11 @@ class DynamicGoal2(Node):
       return
 
     try:
+      try:
+        self.get_logger().info(f"Canceling active navigation goal id={self._current_navigation_goal_id}")
+      except Exception:
+        pass
+      self._current_navigation_goal = None
       cancel_future = self._goal_handle.cancel_goal_async()
       cancel_future.add_done_callback(self._cancel_navigation_goal_callback)
     except Exception as e:
@@ -396,6 +404,9 @@ class DynamicGoal2(Node):
     self._memory.first_time = True
 
     try:
+      self._dynamic_start_time = time.time()
+      self.get_logger().info(f"DynamicGoal execution started at {self._dynamic_start_time:.3f}")
+
       while True:
         if goal_handle.is_cancel_requested:
           self._cancel_active_navigation_goal()
@@ -474,6 +485,12 @@ class DynamicGoal2(Node):
             if candidate_dist + self._granularity < current_dist:
               update_goal = True
               use_candidate = True
+              try:
+                self.get_logger().info(
+                  f"Candidate better: candidate_dist={candidate_dist:.2f}, current_dist={current_dist:.2f}, granularity={self._granularity}"
+                )
+              except Exception:
+                pass
 
           self._costmap_updated = False
         elif map_updated:
@@ -510,7 +527,7 @@ class DynamicGoal2(Node):
             goal, q = self.choose_navigation_goal(robot_point, target_point)
 
           if goal is None:
-            self.get_logger().debug("No free navigation goal found; waiting for costmap update.")
+            self.get_logger().info("No free navigation goal found; waiting for costmap update.")
             self._rate.sleep()
             continue
 
@@ -523,6 +540,10 @@ class DynamicGoal2(Node):
           pose.pose.orientation.y = q[1]
           pose.pose.orientation.z = q[2]
           pose.pose.orientation.w = q[3]
+          # If the dynamic run was marked finished by a concurrent callback, skip sending.
+          if not self._follow_until_cancel and self._navigation_goal_finnished:
+            self.get_logger().info("Skipping send: navigation already finished by callback.")
+            break
 
           # Cancel the currently active Nav2 goal before sending the updated one.
           if self._has_active_navigation_goal():
@@ -530,10 +551,17 @@ class DynamicGoal2(Node):
 
           async_goal = NavigateToPose.Goal()
           async_goal.pose = pose
+          self._current_navigation_goal_id += 1
+          navigation_goal_id = self._current_navigation_goal_id
           self._current_navigation_goal = Point(x=goal.x, y=goal.y, z=goal.z)
           self._navigation_goal_finnished = False
           self._navigation_goal_future = self._navigation_client.send_goal_async(async_goal)
-          self._navigation_goal_future.add_done_callback(self._navigation_goal_response_callback)
+          self.get_logger().info(
+            f"Sending navigation goal id={navigation_goal_id} -> ({goal.x:.2f},{goal.y:.2f}) toward target ({target_point.x:.2f},{target_point.y:.2f})"
+          )
+          self._navigation_goal_future.add_done_callback(
+            lambda future, goal_id=navigation_goal_id: self._navigation_goal_response_callback(future, goal_id)
+          )
 
         if not self._follow_until_cancel and self._navigation_goal_finnished:
           break
@@ -548,30 +576,55 @@ class DynamicGoal2(Node):
     finally:
       self._dynamic_goal_active = False
 
-  def _get_navigation_result_callback(self, future):
+  def _get_navigation_result_callback(self, future, goal_id):
+    if goal_id != self._current_navigation_goal_id:
+      self.get_logger().debug("Ignoring stale navigation result.")
+      return
+
     if future is not self._get_navigation_result_future:
       self.get_logger().debug("Ignoring stale navigation result.")
       return
 
     result = future.result()
+    try:
+      status_map = {
+        GoalStatus.STATUS_SUCCEEDED: "SUCCEEDED",
+        GoalStatus.STATUS_CANCELED: "CANCELED",
+        GoalStatus.STATUS_ABORTED: "ABORTED",
+      }
+      status_name = status_map.get(result.status, str(result.status))
+      elapsed = time.time() - self._dynamic_start_time if self._dynamic_start_time else 0.0
+      self.get_logger().info(f"Navigation result for id={goal_id}: status={status_name} elapsed={elapsed:.2f}s")
+    except Exception:
+      pass
+
     if result.status == GoalStatus.STATUS_SUCCEEDED:
       self.get_logger().info("Navigation goal was achieved successfully.")
+      # Successful navigation is terminal when not following until cancel.
       if not self._follow_until_cancel:
         self._navigation_goal_finnished = True
-        self._current_navigation_goal = None
+      self._current_navigation_goal = None
     elif result.status == GoalStatus.STATUS_CANCELED:
       self.get_logger().info("Navigation goal was canceled.")
+      # A canceled navigation goal can be an internal preemption; clear the current
+      # navigation goal but don't treat it as terminal so dynamic replanning can continue.
       self._current_navigation_goal = None
-      if not self._follow_until_cancel:
-        self._navigation_goal_finnished = True
     elif result.status == GoalStatus.STATUS_ABORTED:
       self.get_logger().warn("Navigation goal was aborted.")
+      # An aborted navigation goal indicates failure to reach that particular pose.
+      # Clear the current goal but continue the dynamic process (do not set finished).
       self._current_navigation_goal = None
-      if not self._follow_until_cancel:
-        self._navigation_goal_finnished = True
 
-  def _navigation_goal_response_callback(self, future):
+  def _navigation_goal_response_callback(self, future, goal_id):
+    if goal_id != self._current_navigation_goal_id:
+      self.get_logger().debug("Ignoring stale navigation goal response.")
+      return
+
     self._goal_handle = future.result()
+    try:
+      self.get_logger().info(f"Navigation goal response for id={goal_id}, accepted={self._goal_handle.accepted}")
+    except Exception:
+      pass
     if not self._goal_handle.accepted:
       self.get_logger().warn("Navigation goal rejected.")
       self._goal = ""
@@ -584,7 +637,9 @@ class DynamicGoal2(Node):
 
     self.get_logger().info("Navigation goal accepted.")
     self._get_navigation_result_future = self._goal_handle.get_result_async()
-    self._get_navigation_result_future.add_done_callback(self._get_navigation_result_callback)
+    self._get_navigation_result_future.add_done_callback(
+      lambda future, goal_id=goal_id: self._get_navigation_result_callback(future, goal_id)
+    )
 
 
 def main(args=None):

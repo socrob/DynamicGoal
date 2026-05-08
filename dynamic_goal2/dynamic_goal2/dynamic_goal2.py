@@ -44,6 +44,7 @@ class DynamicGoal2(Node):
     self.declare_parameter("movement_threshold", 0.50)
     self.declare_parameter("number_points", 50)
     self.declare_parameter("occupancy_path", 90.0)
+    self.declare_parameter("occupancy_threshold", 0.0)
     self.declare_parameter("radius", 0.50)
     self.declare_parameter("rate", 0.50)
     self.declare_parameter("rotational_threshold", 0.90)
@@ -58,6 +59,7 @@ class DynamicGoal2(Node):
     self._movement_threshold = self.get_parameter("movement_threshold").get_parameter_value().double_value
     self._number_points = self.get_parameter("number_points").get_parameter_value().integer_value
     self._occupancy_path = self.get_parameter("occupancy_path").get_parameter_value().double_value
+    self._occupancy_threshold = self.get_parameter("occupancy_threshold").get_parameter_value().double_value
     self._radius = self.get_parameter("radius").get_parameter_value().double_value
     self._rate = self.get_parameter("rate").get_parameter_value().double_value
     self._rotational_threshold = self.get_parameter("rotational_threshold").get_parameter_value().double_value
@@ -147,7 +149,7 @@ class DynamicGoal2(Node):
         self.show_spheres_rviz(circle)
 
       while len(circle) != 0:
-        if not self.is_cell_available(circle[0], 0.0):
+        if not self.is_cell_available(circle[0], self._occupancy_threshold):
           del circle[0]
         else:
           if not self.is_path_to_target_available(circle[0], target_position):
@@ -317,7 +319,7 @@ class DynamicGoal2(Node):
     if self._current_navigation_goal is None or self._map_info is None:
       return True
 
-    if not self.is_cell_available(self._current_navigation_goal, 0.0):
+    if not self.is_cell_available(self._current_navigation_goal, self._occupancy_threshold):
       return False
 
     return True

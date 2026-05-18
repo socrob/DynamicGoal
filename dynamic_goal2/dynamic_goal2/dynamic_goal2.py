@@ -46,6 +46,7 @@ class DynamicGoal2(Node):
     self.declare_parameter("occupancy_path", 90.0)
     self.declare_parameter("occupancy_threshold", 0.0)
     self.declare_parameter("radius", 0.50)
+    self.declare_parameter("align_only_when_within_radius", True)
     self.declare_parameter("rate", 0.50)
     self.declare_parameter("rotational_threshold", 0.90)
     self.declare_parameter("full_circle", 1.0)
@@ -61,6 +62,7 @@ class DynamicGoal2(Node):
     self._occupancy_path = self.get_parameter("occupancy_path").get_parameter_value().double_value
     self._occupancy_threshold = self.get_parameter("occupancy_threshold").get_parameter_value().double_value
     self._radius = self.get_parameter("radius").get_parameter_value().double_value
+    self._align_only_when_within_radius = self.get_parameter("align_only_when_within_radius").get_parameter_value().bool_value
     self._rate = self.get_parameter("rate").get_parameter_value().double_value
     self._rotational_threshold = self.get_parameter("rotational_threshold").get_parameter_value().double_value
     self._full_circle = self.get_parameter("full_circle").get_parameter_value().double_value
@@ -109,6 +111,15 @@ class DynamicGoal2(Node):
     self.add_on_set_parameters_callback(self._on_param_change)
 
   def choose_navigation_goal(self, robot_position, target_position):
+    if self._align_only_when_within_radius:
+      distance_to_target = self.distance_2D(robot_position.x, robot_position.y, target_position.x, target_position.y)
+      if distance_to_target < self._radius:
+        goal = Point()
+        goal.x = robot_position.x
+        goal.y = robot_position.y
+        goal.z = 0.0
+        return goal, self.get_quaternion(goal, target_position)
+
     radius = self._radius
     extra_distance = 0.0
     goal_found = False
@@ -198,6 +209,8 @@ class DynamicGoal2(Node):
         self._occupancy_path = param.value
       elif param.name == "radius":
         self._radius = param.value
+      elif param.name == "align_only_when_within_radius":
+        self._align_only_when_within_radius = param.value
       elif param.name == "rate":
         if param.value > 0.0:
           self._rate = self.create_rate(param.value)

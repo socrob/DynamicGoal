@@ -14,4 +14,5 @@ dynamic_goal2:
     number_points: 50
     occupancy_path: 90.0
     radius: 0.50
+    align_only_when_within_radius: true
     rate: 0.50

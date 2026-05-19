@@ -41,11 +41,12 @@ class DynamicGoal2(Node):
     self.declare_parameter("rviz_line_visualization", False)
     self.declare_parameter("rviz_circle_visualization", True)
     self.declare_parameter("granularity", 0.1)
-    self.declare_parameter("movement_threshold", 0.50)
+    self.declare_parameter("movement_threshold", 0.25)
     self.declare_parameter("number_points", 50)
     self.declare_parameter("occupancy_path", 90.0)
     self.declare_parameter("occupancy_threshold", 0.0)
     self.declare_parameter("radius", 0.50)
+    self.declare_parameter("path_to_target_fraction", 0.5)
     self.declare_parameter("align_only_when_within_radius", True)
     self.declare_parameter("rate", 0.50)
     self.declare_parameter("rotational_threshold", 0.90)
@@ -62,6 +63,7 @@ class DynamicGoal2(Node):
     self._occupancy_path = self.get_parameter("occupancy_path").get_parameter_value().double_value
     self._occupancy_threshold = self.get_parameter("occupancy_threshold").get_parameter_value().double_value
     self._radius = self.get_parameter("radius").get_parameter_value().double_value
+    self._path_to_target_fraction = self.get_parameter("path_to_target_fraction").get_parameter_value().double_value
     self._align_only_when_within_radius = self.get_parameter("align_only_when_within_radius").get_parameter_value().bool_value
     self._rate = self.get_parameter("rate").get_parameter_value().double_value
     self._rotational_threshold = self.get_parameter("rotational_threshold").get_parameter_value().double_value
@@ -209,6 +211,15 @@ class DynamicGoal2(Node):
         self._occupancy_path = param.value
       elif param.name == "radius":
         self._radius = param.value
+      elif param.name == "path_to_target_fraction":
+        if 0.0 <= param.value <= 1.0:
+          self._path_to_target_fraction = param.value
+        elif param.value < 0.0:
+          self._path_to_target_fraction = 0.0
+          self.get_logger().warn("path_to_target_fraction cannot be negative; setting to 0.0")
+        else:
+          self._path_to_target_fraction = 1.0
+          self.get_logger().warn("path_to_target_fraction must be between 0.0 and 1.0")
       elif param.name == "align_only_when_within_radius":
         self._align_only_when_within_radius = param.value
       elif param.name == "rate":
@@ -253,7 +264,8 @@ class DynamicGoal2(Node):
       number_points = 2
 
     line = []
-    for i in range(1, int(round(number_points / 2))):
+    end_point = int(round(number_points * self._path_to_target_fraction))
+    for i in range(1, end_point):
       t = i / float(number_points)
       point = Point()
       point.x = origin.x + dx * t

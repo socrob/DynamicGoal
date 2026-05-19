@@ -52,6 +52,7 @@ class DynamicGoal2(Node):
     self.declare_parameter("rotational_threshold", 0.90)
     self.declare_parameter("full_circle", 1.0)
     self.declare_parameter("follow_until_cancel", True)
+    self.declare_parameter("allow_unknown_cells", False)
 
     self._origin_frame = self.get_parameter("origin_frame").get_parameter_value().string_value
     self._robot_frame = self.get_parameter("robot_frame").get_parameter_value().string_value
@@ -69,6 +70,7 @@ class DynamicGoal2(Node):
     self._rotational_threshold = self.get_parameter("rotational_threshold").get_parameter_value().double_value
     self._full_circle = self.get_parameter("full_circle").get_parameter_value().double_value
     self._follow_until_cancel = self.get_parameter("follow_until_cancel").get_parameter_value().bool_value
+    self._allow_unknown_cells = self.get_parameter("allow_unknown_cells").get_parameter_value().bool_value
 
     self._goal = ""
     self._goal_handle = None
@@ -88,6 +90,8 @@ class DynamicGoal2(Node):
 
     self._map = None
     self._map_info = None
+    self._raw_map = None
+    self._raw_map_info = None
     self._costmap_width = None
     self._costmap_height = None
 
@@ -109,6 +113,7 @@ class DynamicGoal2(Node):
 
     # Subscribers
     self._costmap_2D_sub = self.create_subscription(OccupancyGrid, "/global_costmap/costmap", self._costmap_callback, 10)
+    self._map_sub = self.create_subscription(OccupancyGrid, "/map", self._map_callback, 10)
 
     self.add_on_set_parameters_callback(self._on_param_change)
 
@@ -229,6 +234,8 @@ class DynamicGoal2(Node):
         self._rotational_threshold = param.value
       elif param.name == "follow_until_cancel":
         self._follow_until_cancel = param.value
+      elif param.name == "allow_unknown_cells":
+        self._allow_unknown_cells = param.value
 
     return SetParametersResult(successful=True)
 
@@ -253,7 +260,29 @@ class DynamicGoal2(Node):
     cost = self._map[ix, iy]
     if cost < 0:
       return False
+    
+    # Check for unknown cells in the raw map if not allowing them
+    if not self._allow_unknown_cells:
+      if not self._is_cell_known(point):
+        return False
+    
     return cost <= occupancy
+
+  def _is_cell_known(self, point):
+    """Check if a cell is known (not -1) in the raw map."""
+    if self._raw_map_info is None or self._raw_map is None:
+      # If no raw map available, assume cell is known
+      return True
+
+    [x, y] = self.map_to_index(point.x, point.y)
+    ix = int(round(x))
+    iy = int(round(y))
+
+    if ix < 0 or iy < 0 or ix >= self._raw_map.shape[0] or iy >= self._raw_map.shape[1]:
+      return False
+
+    cell_value = self._raw_map[ix, iy]
+    return cell_value >= 0  # Unknown cells have value -1
 
   def is_path_to_target_available(self, origin, target):
     dx = target.x - origin.x
@@ -373,6 +402,26 @@ class DynamicGoal2(Node):
     self._map = data.reshape((height, width)).T
     self._warned_no_map = False
     self._costmap_updated = True
+
+  def _map_callback(self, msg):
+    """Callback for raw map subscription to detect unknown cells."""
+    self._raw_map_info = msg.info
+
+    width = msg.info.width
+    height = msg.info.height
+
+    if width <= 0 or height <= 0:
+      return
+
+    if self._raw_map is None or self._raw_map.shape != (width, height):
+      self._raw_map = np.zeros((width, height))
+
+    data = np.array(msg.data)
+    if data.size != width * height:
+      self.get_logger().warn("Received malformed raw map data size.")
+      return
+
+    self._raw_map = data.reshape((height, width)).T
 
   def _cancel_navigation_goal_callback(self, future):
     cancel_response = future.result()

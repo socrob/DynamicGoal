@@ -82,6 +82,7 @@ class DynamicGoal2(Node):
     self._navigation_goal_finnished = True
     self._pending_cancel = False
     self._dynamic_goal_active = False
+    self._preempt_requested = False
     self._warned_no_map = False
     self._costmap_updated = False
 
@@ -449,8 +450,7 @@ class DynamicGoal2(Node):
   def _dynamic_goal_goal_callback(self, goal_request):
     _ = goal_request
     if self._dynamic_goal_active:
-      self.get_logger().warn("DynamicGoal2 already has an active goal. Rejecting new goal.")
-      return GoalResponse.REJECT
+      self.get_logger().info("DynamicGoal2 has an active goal. Accepting new goal and preempting the current one.")
     return GoalResponse.ACCEPT
 
   def _dynamic_goal_cancel_callback(self, goal_handle):
@@ -460,6 +460,14 @@ class DynamicGoal2(Node):
     return CancelResponse.ACCEPT
 
   def _dynamic_goal_execute_callback(self, goal_handle):
+    if self._dynamic_goal_active:
+      self._preempt_requested = True
+      # Wait briefly for the previous execution thread to clean up and exit
+      while self._dynamic_goal_active:
+        time.sleep(0.05)
+
+    self._preempt_requested = False
+
     self.get_logger().info("Starting new DynamicGoal execution")
 
     # RESET INTERNAL STATE
@@ -484,6 +492,15 @@ class DynamicGoal2(Node):
       self.get_logger().info(f"DynamicGoal execution started at {self._dynamic_start_time:.3f}")
 
       while True:
+        if self._preempt_requested:
+          self.get_logger().info("Preempt requested by new goal. Canceling active navigation...")
+          self._cancel_active_navigation_goal()
+          goal_handle.abort()
+          result = DynamicGoal.Result()
+          result.success = False
+          result.message = "Dynamic goal preempted by a new request."
+          return result
+
         if goal_handle.is_cancel_requested:
           self._cancel_active_navigation_goal()
           goal_handle.canceled()

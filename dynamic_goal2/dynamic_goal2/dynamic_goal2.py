@@ -3,6 +3,8 @@ import time
 import numpy as np
 
 import rclpy
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra
 from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
 from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion, Vector3
@@ -21,6 +23,29 @@ from tf2_ros.transform_listener import TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
 from dynamic_goal2_action.action import DynamicGoal
+
+# goal_selection: "straight_line" sorts the candidate goals by their straight-line
+# distance to the robot; "path" by the length of the path to them through the costmap
+GOAL_SELECTION_MODES = ("straight_line", "path")
+
+# Costmap cells (0-100) the robot's center may cross when measuring path lengths:
+# below 99, the inflation layer's "inscribed" value
+PATH_MAX_COST = 99
+
+# Extra space (m) around the robot and the target searched for paths
+PATH_WINDOW_MARGIN = 3.0
+
+# Around the robot's center (m), paths may also cross inscribed cells (99), so a robot
+# standing in an obstacle's inflation, or next to a marked person, can still get out
+PATH_ESCAPE_RADIUS = 0.5
+
+# A candidate's path may be at most this fraction of the circle's radius longer than the
+# path to the target; longer paths go past the target to its far side
+PATH_OVERTAKE_FRACTION = 0.5
+
+# The path to the target ends at the nearest reachable cell within this distance (m) of
+# it, since the target's own cell is often an obstacle (a person seen by the laser)
+PATH_TARGET_SEARCH_RADIUS = 0.5
 
 
 class Memory:
@@ -53,6 +78,8 @@ class DynamicGoal2(Node):
     self.declare_parameter("full_circle", 1.0)
     self.declare_parameter("follow_until_cancel", True)
     self.declare_parameter("allow_unknown_cells", False)
+    self.declare_parameter("goal_selection", "straight_line")
+    self.declare_parameter("cancel_before_new_goal", True)
 
     self._origin_frame = self.get_parameter("origin_frame").get_parameter_value().string_value
     self._robot_frame = self.get_parameter("robot_frame").get_parameter_value().string_value
@@ -71,6 +98,13 @@ class DynamicGoal2(Node):
     self._full_circle = self.get_parameter("full_circle").get_parameter_value().double_value
     self._follow_until_cancel = self.get_parameter("follow_until_cancel").get_parameter_value().bool_value
     self._allow_unknown_cells = self.get_parameter("allow_unknown_cells").get_parameter_value().bool_value
+    self._goal_selection = self.get_parameter("goal_selection").get_parameter_value().string_value
+    if self._goal_selection not in GOAL_SELECTION_MODES:
+      self.get_logger().warn(f"Unknown goal_selection '{self._goal_selection}'; using 'straight_line'")
+      self._goal_selection = "straight_line"
+    # False: send each new goal straight away and let Nav2 replace the active one,
+    # instead of cancelling it first (which stops the robot)
+    self._cancel_before_new_goal = self.get_parameter("cancel_before_new_goal").get_parameter_value().bool_value
 
     self._goal = ""
     self._goal_handle = None
@@ -135,9 +169,30 @@ class DynamicGoal2(Node):
     robot_position_for_angle = np.array([robot_position.x, robot_position.y])
     target_position_for_angle = np.array([target_position.x, target_position.y])
 
+    # Path lengths from the robot, so a point behind furniture doesn't count as close
+    path_field = None
+    path_to_target = math.inf
+    if self._goal_selection == "path":
+      path_field = self._path_distances(robot_position, target_position)
+      if path_field is None:
+        self.get_logger().warn("Path lengths unavailable; choosing the goal by straight-line distance.")
+      else:
+        path_to_target = self._path_distance_to_target(path_field, target_position)
+
     while not goal_found:
       circle = []
       radius += extra_distance * self._granularity
+
+      # Path lengths only cover a window around the robot and the target. Past it every
+      # candidate would be dropped and the circle would grow without end, so the search
+      # starts again from the first circle, by straight-line distance
+      if path_field is not None and radius > self._radius + PATH_WINDOW_MARGIN:
+        self.get_logger().warn(
+          "No reachable free point near the target; choosing the goal by straight-line distance."
+        )
+        path_field = None
+        radius = self._radius
+        extra_distance = 0.0
       number_points = int(radius * self._number_points)
       if number_points <= 0:
         number_points = 1
@@ -163,7 +218,16 @@ class DynamicGoal2(Node):
         if abs(angle) < (180 * self._full_circle) + 2:
           circle.append(point)
 
-      circle.sort(key=lambda point: self.distance_to_robot(point, robot_position))
+      if path_field is None:
+        circle.sort(key=lambda point: self.distance_to_robot(point, robot_position))
+      else:
+        # Unreachable points (inf) are dropped, and so are points whose path passes the
+        # target (longer than the path to the target plus half the radius): the robot
+        # shouldn't overtake it to reach the far side. The rest go nearest first along the path
+        longest_path = path_to_target + PATH_OVERTAKE_FRACTION * radius
+        path_lengths = {id(point): self._path_distance_at(path_field, point) for point in circle}
+        circle = [point for point in circle if path_lengths[id(point)] <= longest_path]
+        circle.sort(key=lambda point: path_lengths[id(point)])
       if self._rviz_circle_visualization:
         self.show_spheres_rviz(circle)
 
@@ -237,6 +301,14 @@ class DynamicGoal2(Node):
         self._follow_until_cancel = param.value
       elif param.name == "allow_unknown_cells":
         self._allow_unknown_cells = param.value
+      elif param.name == "goal_selection":
+        if param.value not in GOAL_SELECTION_MODES:
+          return SetParametersResult(
+            successful=False, reason=f"goal_selection must be one of {', '.join(GOAL_SELECTION_MODES)}"
+          )
+        self._goal_selection = param.value
+      elif param.name == "cancel_before_new_goal":
+        self._cancel_before_new_goal = param.value
 
     return SetParametersResult(successful=True)
 
@@ -310,6 +382,106 @@ class DynamicGoal2(Node):
       self.show_spheres_rviz(line)
 
     return True
+
+  def _path_distances(self, robot_position, target_position):
+    """Path lengths (m) from the robot to the costmap cells around the robot and the target.
+
+    Dijkstra over the cells the robot's center may cross (known, cost below
+    PATH_MAX_COST), 8-connected, in a window that covers both positions plus
+    radius + PATH_WINDOW_MARGIN. The robot's own cell counts as free, even close to an
+    obstacle.
+
+    Returns:
+      (distances, (i0, j0)): the window's path lengths, indexed like self._map
+      ([x index, y index]), inf where unreachable, and the window's first cell.
+      None without a costmap, or with the robot outside it.
+    """
+    if self._map is None or self._map_info is None:
+      return None
+
+    # The window, in cells
+    margin = self._radius + PATH_WINDOW_MARGIN
+    x_low, y_low = self.map_to_index(
+      min(robot_position.x, target_position.x) - margin, min(robot_position.y, target_position.y) - margin
+    )
+    x_high, y_high = self.map_to_index(
+      max(robot_position.x, target_position.x) + margin, max(robot_position.y, target_position.y) + margin
+    )
+    i0 = max(int(math.floor(x_low)), 0)
+    j0 = max(int(math.floor(y_low)), 0)
+    i1 = min(int(math.ceil(x_high)) + 1, self._map.shape[0])
+    j1 = min(int(math.ceil(y_high)) + 1, self._map.shape[1])
+    window = self._map[i0:i1, j0:j1]
+
+    robot_x, robot_y = self.map_to_index(robot_position.x, robot_position.y)
+    robot_i = int(round(robot_x)) - i0
+    robot_j = int(round(robot_y)) - j0
+    if not (0 <= robot_i < window.shape[0] and 0 <= robot_j < window.shape[1]):
+      return None
+
+    free = (window >= 0) & (window < PATH_MAX_COST)
+
+    # The robot is where it is: near its center, inscribed cells don't block the way out
+    resolution = self._map_info.resolution
+    cell_i, cell_j = np.ogrid[0:window.shape[0], 0:window.shape[1]]
+    near_robot = np.hypot(cell_i - robot_i, cell_j - robot_j) * resolution <= PATH_ESCAPE_RADIUS
+    free |= near_robot & (window >= 0) & (window <= PATH_MAX_COST)
+    free[robot_i, robot_j] = True
+
+    # Graph of neighbouring free cells (each pair once: right, up and the two diagonals)
+    ids = np.full(window.shape, -1, dtype=np.int64)
+    ids[free] = np.arange(np.count_nonzero(free))
+    rows, columns = window.shape
+    sources = []
+    destinations = []
+    weights = []
+    for di, dj, weight in ((1, 0, 1.0), (0, 1, 1.0), (1, 1, math.sqrt(2.0)), (1, -1, math.sqrt(2.0))):
+      a = ids[0:rows - di, max(0, -dj):columns - max(0, dj)]
+      b = ids[di:rows, max(0, dj):columns - max(0, -dj)]
+      both = (a >= 0) & (b >= 0)
+      sources.append(a[both])
+      destinations.append(b[both])
+      weights.append(np.full(np.count_nonzero(both), weight))
+    count = int(ids.max()) + 1
+    graph = csr_matrix(
+      (np.concatenate(weights), (np.concatenate(sources), np.concatenate(destinations))), shape=(count, count)
+    )
+
+    # Path lengths from the robot's cell, in metres
+    lengths = dijkstra(graph, directed=False, indices=int(ids[robot_i, robot_j]))
+    distances = np.full(window.shape, np.inf)
+    distances[free] = lengths * resolution
+    return distances, (i0, j0)
+
+  def _path_distance_to_target(self, path_field, target_position):
+    """Path length (m) from the robot to the target, from _path_distances.
+
+    The path ends at the reachable cell within PATH_TARGET_SEARCH_RADIUS of the target that
+    minimises its path length plus its straight-line distance to the target. inf if
+    there is none, which turns off the overtaking check.
+    """
+    distances, (i0, j0) = path_field
+    resolution = self._map_info.resolution
+    target_x, target_y = self.map_to_index(target_position.x, target_position.y)
+    target_i = target_x - i0
+    target_j = target_y - j0
+
+    cell_i, cell_j = np.ogrid[0:distances.shape[0], 0:distances.shape[1]]
+    to_target = np.hypot(cell_i - target_i, cell_j - target_j) * resolution
+    near_target = to_target <= PATH_TARGET_SEARCH_RADIUS
+    if not np.any(near_target):
+      return math.inf
+    return float(np.min((distances + to_target)[near_target]))
+
+  def _path_distance_at(self, path_field, point):
+    """Path length (m) from the robot to a point, from _path_distances; inf if unreachable."""
+    distances, (i0, j0) = path_field
+    x, y = self.map_to_index(point.x, point.y)
+    i = int(round(x)) - i0
+    j = int(round(y)) - j0
+    if not (0 <= i < distances.shape[0] and 0 <= j < distances.shape[1]):
+      return math.inf
+    return float(distances[i, j])
 
   def map_to_index(self, ix, iy):
     origin_x = self._map_info.origin.position.x
@@ -638,8 +810,9 @@ class DynamicGoal2(Node):
             self.get_logger().info("Skipping send: navigation already finished by callback.")
             break
 
-          # Cancel the currently active Nav2 goal before sending the updated one.
-          if self._has_active_navigation_goal():
+          # Cancel the currently active Nav2 goal before sending the updated one, unless
+          # Nav2 should replace it (a new goal preempts the active one without stopping)
+          if self._cancel_before_new_goal and self._has_active_navigation_goal():
             self._cancel_active_navigation_goal()
 
           async_goal = NavigateToPose.Goal()

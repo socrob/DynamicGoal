@@ -43,11 +43,6 @@ PATH_ESCAPE_RADIUS = 0.5
 # path to the target; longer paths go past the target to its far side
 PATH_OVERTAKE_FRACTION = 0.5
 
-# The path to the target ends at the nearest reachable cell within this distance (m) of
-# it, since the target's own cell is often an obstacle (a person seen by the laser)
-PATH_TARGET_SEARCH_RADIUS = 0.5
-
-
 class Memory:
   last_point = None
   last_yaw = None
@@ -456,9 +451,10 @@ class DynamicGoal2(Node):
   def _path_distance_to_target(self, path_field, target_position):
     """Path length (m) from the robot to the target, from _path_distances.
 
-    The path ends at the reachable cell within PATH_TARGET_SEARCH_RADIUS of the target that
-    minimises its path length plus its straight-line distance to the target. inf if
-    there is none, which turns off the overtaking check.
+    The target's own cell is often an obstacle: a person seen by the laser, with the
+    inscribed band of the inflation around them. So the path ends at the reachable cell
+    within `radius` of the target that minimises its path length plus its straight-line
+    distance to the target. inf if there is none, which turns off the overtaking check.
     """
     distances, (i0, j0) = path_field
     resolution = self._map_info.resolution
@@ -468,7 +464,7 @@ class DynamicGoal2(Node):
 
     cell_i, cell_j = np.ogrid[0:distances.shape[0], 0:distances.shape[1]]
     to_target = np.hypot(cell_i - target_i, cell_j - target_j) * resolution
-    near_target = to_target <= PATH_TARGET_SEARCH_RADIUS
+    near_target = to_target <= self._radius
     if not np.any(near_target):
       return math.inf
     return float(np.min((distances + to_target)[near_target]))

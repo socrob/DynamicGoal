@@ -142,3 +142,24 @@ def test_goal_does_not_overtake_the_target():
   # Not the free point past the target (y 3.5), but a point before the costly band
   assert goal.y < 1.4
   assert abs(goal.x - 2.5) < 0.5
+
+
+def test_no_overtaking_when_the_target_is_an_obstacle():
+  # Same corridor, but the target is a person the laser sees: lethal legs and the
+  # inscribed band around them, so no cell within 0.5 m of the target is reachable
+  size = int(5.0 / RESOLUTION)
+  costmap = np.full((size, size), 100.0)
+  costmap[int(2.0 / RESOLUTION):int(3.0 / RESOLUTION), :] = 0.0
+  costmap[int(2.0 / RESOLUTION):int(3.0 / RESOLUTION), int(1.4 / RESOLUTION):int(1.75 / RESOLUTION)] = 80.0
+  robot = Point(x=2.5, y=0.3)
+  target = Point(x=2.5, y=2.5)
+  x = (np.arange(size) + 0.5) * RESOLUTION
+  y = (np.arange(size) + 0.5) * RESOLUTION
+  xx, yy = np.meshgrid(x, y, indexing='ij')
+  to_person = np.hypot(xx - target.x, yy - target.y)
+  costmap[to_person < 0.55] = 99
+  costmap[to_person < 0.15] = 100
+
+  goal, _ = make_node(costmap, 'path').choose_navigation_goal(robot, target)
+
+  assert goal.y < target.y
